@@ -68,6 +68,8 @@ function result = kiaSort_compare_sortings(A, B, fs, varargin)
     opts.ignore_labels   = [];
     opts.nameA           = 'A';
     opts.nameB           = 'B';
+    opts.subdirA         = 'RES_Sorted';   % results subfolder for a path input A
+    opts.subdirB         = 'RES_Sorted';   % results subfolder for a path input B
     opts.verbose         = true;
     opts = i_parseOpts(opts, varargin);
 
@@ -75,8 +77,8 @@ function result = kiaSort_compare_sortings(A, B, fs, varargin)
         error('kiaSort_compare_sortings:fs', 'FS (sampling rate in Hz) is required.');
     end
 
-    [spkA, lblA] = i_getSorting(A);
-    [spkB, lblB] = i_getSorting(B);
+    [spkA, lblA] = i_getSorting(A, opts.subdirA);
+    [spkB, lblB] = i_getSorting(B, opts.subdirB);
 
     if ~isempty(opts.ignore_labels)
         keepA = ~ismember(lblA, opts.ignore_labels);
@@ -200,10 +202,14 @@ function result = kiaSort_compare_sortings(A, B, fs, varargin)
 end
 
 % ------------------------------------------------------------------------
-function [spk, lbl] = i_getSorting(X)
+function [spk, lbl] = i_getSorting(X, subdir)
     if ischar(X) || isstring(X)
-        s = kiaSort_load_results(char(X));
-        spk = s.spike_idx; lbl = s.unifiedLabels;
+        resDir = fullfile(char(X), subdir);
+        if ~exist(resDir, 'dir')
+            error('kiaSort_compare_sortings:input', 'Results folder not found: %s', resDir);
+        end
+        spk = i_readH5(resDir, 'spike_idx');
+        lbl = i_readH5(resDir, 'unifiedLabels');
     elseif isstruct(X)
         if isfield(X, 'spike_idx') && isfield(X, 'unifiedLabels')
             spk = X.spike_idx; lbl = X.unifiedLabels;
@@ -224,6 +230,12 @@ function [spk, lbl] = i_getSorting(X)
         error('kiaSort_compare_sortings:input', ...
             'spike_idx and labels must have the same length.');
     end
+end
+
+% ------------------------------------------------------------------------
+function v = i_readH5(folder, name)
+    v = h5read(fullfile(folder, [name '.h5']), ['/' name]);
+    v = v(:);
 end
 
 % ------------------------------------------------------------------------

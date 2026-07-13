@@ -38,11 +38,13 @@ function kiaSort_sortData_parallel(inputPath, outputPath, cfg, varargin)
     keepParts   = false;
     verbose     = true;
     numWorkers  = [];
+    skipPostHoc = false;   % skip drift-merge/curate (e.g. for raw parallel-vs-serial validation)
     for i = 1:2:numel(varargin)
         switch lower(varargin{i})
             case 'progressfcn', progressFcn = varargin{i+1};
             case 'numworkers',  numWorkers  = varargin{i+1};
             case 'keepparts',   keepParts   = logical(varargin{i+1});
+            case 'skipposthoc', skipPostHoc = logical(varargin{i+1});
             case 'verbose',     verbose     = logical(varargin{i+1});
             otherwise, warning('kiaSort_sortData_parallel: unknown option "%s".', varargin{i});
         end
@@ -141,7 +143,7 @@ function kiaSort_sortData_parallel(inputPath, outputPath, cfg, varargin)
     end
 
     % Post-hoc drift merge + curate, once, on the merged result (mirror sortData).
-    if isfield(cfg,'postHocProcessing') && cfg.postHocProcessing && ...
+    if ~skipPostHoc && isfield(cfg,'postHocProcessing') && cfg.postHocProcessing && ...
             ~(isfield(cfg,'sort_only') && cfg.sort_only)
         kiaSort_drift_merge_posthoc_iterative(outputPath, ...
             'overwrite', true, 'verbose', false, 'mainArgs', {'debugFigs', false});
