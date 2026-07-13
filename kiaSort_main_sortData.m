@@ -1,6 +1,9 @@
 function kiaSort_main_sortData(inputPath, outputPath, cfg, varargin)
 
 progressFcn = [];
+chunkRange   = [];              % [c0 c1] subrange of chunks to process ([] = all)
+resultSubdir = 'RES_Sorted';    % output subfolder (per-worker folder for parallel runs)
+skipPostHoc  = false;           % skip drift-merge/curate (orchestrator runs it once at the end)
 
 for i = 1:2:length(varargin)
     name = lower(varargin{i});
@@ -10,6 +13,12 @@ for i = 1:2:length(varargin)
             if isa(value, 'function_handle')
                 progressFcn = value;
             end
+        case 'chunk_range'
+            chunkRange = value;
+        case 'resultsubdir'
+            if ~isempty(value), resultSubdir = value; end
+        case 'skip_posthoc'
+            skipPostHoc = logical(value);
         otherwise
             warning('Unknown parameter: %s', varargin{i});
     end
@@ -59,12 +68,12 @@ try
         error('sorted_samples.mat not found in Sorted_Samples folder.');
     end
 
-    outputFolder = fullfile(outputPath, 'RES_Sorted');
+    outputFolder = fullfile(outputPath, resultSubdir);
     if ~exist(outputFolder, 'dir')
         mkdir(outputFolder);
     elseif isfield(cfg, 'sort_only')
         if cfg.sort_only
-            baseName   = 'RES_Sorted';
+            baseName   = resultSubdir;
             listing = dir(fullfile(outputPath, [baseName '_V*']));
             versionNums = [];
 
@@ -108,6 +117,14 @@ try
     chunk_duration      = cfg.sortingChunkDuration;
     num_chunk_pts       = chunk_duration * fs;
     num_chunks          = ceil(num_samples / num_chunk_pts);
+
+    % Optional subrange of chunks (for parallel orchestration); default = all.
+    if isempty(chunkRange)
+        chunkStart = 1;  chunkEnd = num_chunks;
+    else
+        chunkStart = max(1, chunkRange(1));
+        chunkEnd   = min(num_chunks, chunkRange(2));
+    end
     marginOffset_pts    = cfg.borderMargin * fs / 1000;
     spikeDistance        = cfg.spikeDistance * fs / 1000;
     batch_ch_size       = min(cfg.batch_ch_size,num_channels);
@@ -135,7 +152,7 @@ try
     channel_thresholds      = cell(num_channels, 1);
     sorted_out              = [];
 
-    for chunk_i = 1:num_chunks
+    for chunk_i = chunkStart:chunkEnd
 
         chunk_channel_inclusion = true(num_channels,1);
 
@@ -722,7 +739,7 @@ catch ME
     rethrow(ME);
 end
 
-if isfield(cfg,'postHocProcessing')
+if ~skipPostHoc && isfield(cfg,'postHocProcessing')
     if cfg.postHocProcessing
         if ~cfg.sort_only
             kiaSort_drift_merge_posthoc_iterative(outputPath, ...
