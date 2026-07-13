@@ -66,6 +66,12 @@ function result = kiaSort_validate_parallel_sort(inputPath, outputPath, numChann
     fn = fieldnames(p.cfg_overrides);
     for i = 1:numel(fn), cfg.(fn{i}) = p.cfg_overrides.(fn{i}); end
 
+    % Path fields the stage functions expect (run_kiasort_nogui normally sets
+    % these; map_input_file uses cfg.outputFolder for its log).
+    cfg.fullFilePath = inputPath;
+    cfg.inputFolder  = fileparts(inputPath);
+    cfg.outputFolder = outputPath;
+
     % Clean any prior validation outputs.
     for sd = {'RES_Sorted', 'RES_Sorted_serial'}
         d = fullfile(outputPath, sd{1});

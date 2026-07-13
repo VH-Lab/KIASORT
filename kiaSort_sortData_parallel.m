@@ -60,6 +60,12 @@ function kiaSort_sortData_parallel(inputPath, outputPath, cfg, varargin)
         end
     end
 
+    % Path fields the stage functions / map_input_file expect (defensive: the
+    % pipeline normally sets these, but a direct caller may not).
+    if ~isfield(cfg,'outputFolder') || isempty(cfg.outputFolder), cfg.outputFolder = outputPath;          end
+    if ~isfield(cfg,'inputFolder')  || isempty(cfg.inputFolder),  cfg.inputFolder  = fileparts(inputPath); end
+    if ~isfield(cfg,'fullFilePath') || isempty(cfg.fullFilePath), cfg.fullFilePath = inputPath;           end
+
     % Number of chunks - mirror kiaSort_main_sortData exactly.
     m = map_input_file(inputPath, cfg);
     num_samples   = size(m.Data.data, 2);
