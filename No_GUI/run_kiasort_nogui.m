@@ -108,7 +108,12 @@ if doSort
     kiaSort_main_sort_samples(cfg.outputFolder, cfg, hp, sortExtra{:});
 end
 
-kiaSort_main_sortData(cfg.fullFilePath, cfg.outputFolder, cfg, dataExtra{:});
+if isfield(cfg, 'parallelSort') && cfg.parallelSort
+    % Chunk-level parallel stage 3 (opt-in). Serial otherwise.
+    kiaSort_sortData_parallel(cfg.fullFilePath, cfg.outputFolder, cfg, dataExtra{:});
+else
+    kiaSort_main_sortData(cfg.fullFilePath, cfg.outputFolder, cfg, dataExtra{:});
+end
 
 if verbose
     fprintf('Done. Results in %s\n', outputFolder);
