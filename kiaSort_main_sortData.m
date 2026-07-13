@@ -154,6 +154,11 @@ try
         discarded_spk_idx       = cell(num_channels, 1);
 
         for ch_idx = 1:num_channels
+            if ~isempty(progressFcn)
+                pct = ((chunk_i - 1) + (ch_idx - 1) / num_channels) / num_chunks;
+                progressFcn(pct, sprintf('Sorting data: chunk %d/%d, channel %d/%d', ...
+                    chunk_i, num_chunks, ch_idx, num_channels));
+            end
             tic
             ch_indices_mapped  = [max(1, ch_idx - half_window) : min(num_channels, ch_idx + half_window)]';
             ch_indices_cluster = [max(1, ch_idx - release_window - half_window) : min(num_channels, ch_idx + release_window)]';

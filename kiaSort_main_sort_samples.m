@@ -89,6 +89,14 @@ channel_inclusion = channel_info.channel_inclusion;
 
 if cfg.parallelProcessing
     setupParallel(cfg);
+    % Per-channel progress from the parfor workers to the client, via a DataQueue
+    % (a parfor body cannot update the client progress bar directly).
+    dq = [];
+    if ~isempty(progressFcn)
+        i_parTick([], numChannels, progressFcn, true); % reset the shared counter
+        dq = parallel.pool.DataQueue;
+        afterEach(dq, @(ch) i_parTick(ch, numChannels, progressFcn, false));
+    end
     parfor ch = 1:numChannels
         % Create temporary local log messages for each channel, since parfor cannot write to file directly
         msgs = {};
@@ -125,6 +133,9 @@ if cfg.parallelProcessing
             end
         end
         logMessages{ch} = msgs;
+        if ~isempty(dq)
+            send(dq, ch);
+        end
     end
     % After parfor, if any error occurred, write log and throw error
     if any(hasError)
@@ -233,4 +244,21 @@ fprintf(fid, '\nsamples were successfully sorted and results are saved at %s\n',
 fclose(fid);
 fprintf('All channels are processed and samples are sorted.\n');
 
+end
+
+function i_parTick(ch, N, progressFcn, resetCounter) %#ok<INUSD>
+% Client-side per-channel progress tick for the parallel (parfor) branch. Because
+% parfor completes channels out of order, a persistent counter tracks how many have
+% finished; call once with resetCounter=true before the loop to zero it.
+persistent count
+if resetCounter || isempty(count)
+    count = 0;
+end
+if resetCounter
+    return;
+end
+count = count + 1;
+if ~isempty(progressFcn)
+    progressFcn(count / N, sprintf('Sorting samples channel %d of %d', count, N));
+end
 end
