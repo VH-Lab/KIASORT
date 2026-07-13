@@ -86,12 +86,15 @@ extractExtra = {};
 sortExtra    = {};
 dataExtra    = {};
 if ~isempty(progressFcn)
-    extractExtra = {'progressfcn', @(p, m) progressFcn((0 + p) / nStages, m)};
-    if doSort
+    if i_hasVararg('kiaSort_main_extract_sample_data')
+        extractExtra = {'progressfcn', @(p, m) progressFcn((0 + p) / nStages, m)};
+    end
+    if doSort && i_hasVararg('kiaSort_main_sort_samples')
         sortExtra = {'progressfcn', @(p, m) progressFcn((1 + p) / nStages, m)};
-        dataExtra = {'progressfcn', @(p, m) progressFcn((2 + p) / nStages, m)};
-    else
-        dataExtra = {'progressfcn', @(p, m) progressFcn((1 + p) / nStages, m)};
+    end
+    if i_hasVararg('kiaSort_main_sortData')
+        base = 2; if ~doSort, base = 1; end
+        dataExtra = {'progressfcn', @(p, m) progressFcn((base + p) / nStages, m)};
     end
 end
 
@@ -111,4 +114,13 @@ if verbose
     fprintf('Done. Results in %s\n', outputFolder);
 end
 
+end
+
+function tf = i_hasVararg(fnname)
+% True if the function FNNAME accepts varargin (can take extra name-value pairs).
+tf = false;
+try
+    tf = nargin(fnname) < 0;
+catch
+end
 end
