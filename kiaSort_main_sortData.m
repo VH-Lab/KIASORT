@@ -24,11 +24,6 @@ for i = 1:2:length(varargin)
     end
 end
 
-% Per-channel parallelism within each chunk (experimental): whiten the chunk
-% serially, run the per-channel model-search across parallel workers, then run
-% the coupled relabel serially. Serial when false.
-parallelChan = isfield(cfg, 'parallelChan') && cfg.parallelChan;
-
 if isfield(cfg, 'modelType')
     if strcmp(cfg.modelType,'template')
         useTemplate = true;
@@ -175,98 +170,6 @@ try
 
         discarded_spk_idx       = cell(num_channels, 1);
 
-        if parallelChan
-            % ---- Serial whitening of the whole chunk (1x peak memory) --------
-            clen = chunk_limits(2) - chunk_limits(1) + 1;
-            whitened_chunk = zeros(num_channels, clen);
-            nb = ceil(num_channels / batch_ch_size);
-            for b = 1:nb
-                sc = (b-1)*batch_ch_size + 1;
-                ec = min(b*batch_ch_size, num_channels);
-                sd = batch_extract(m, chunk_limits, sc, ec, channel_mapping, channel_inclusion, cfg);
-                if isfield(cfg, 'commonRef')
-                    incl = channel_inclusion(sc:ec);
-                    switch cfg.commonRef
-                        case 'median', sd(incl,:) = sd(incl,:) - median(sd(incl,:),'omitmissing');
-                        case 'mean',   sd(incl,:) = sd(incl,:) - mean(sd(incl,:),'omitmissing');
-                    end
-                end
-                whitened_chunk(sc:ec, :) = sd;
-            end
-
-            % ---- Parallel per-channel model-search (two passes) -------------
-            % Pass 1 slices whitened_chunk(ch,:) so each worker gets only its row
-            % (no 11 GB broadcast). Pass 2 needs neighbour bandpass, so it takes a
-            % per-channel window bundle (sliced) rather than broadcasting all of fdArr.
-            fdArr = cell(num_channels, 1);
-            incl = channel_inclusion;
-            parfor ch = 1:num_channels
-                if incl(ch)
-                    fdArr{ch} = i_fdChannel(whitened_chunk(ch, :), ch, channel_info, cfg);
-                end
-            end
-            whitened_chunk = []; %#ok<NASGU>   % free before pass 2
-
-            % Build per-channel window bundles so pass 2 sends each worker only its
-            % neighbourhood's filter/detect results (sliced), not the whole fdArr.
-            winBundle = cell(num_channels, 1);
-            for ch = 1:num_channels
-                widx = max(1, ch - half_window) : min(num_channels, ch + half_window);
-                winBundle{ch} = fdArr(widx);
-            end
-            wtArr = cell(num_channels, 1);
-            parfor ch = 1:num_channels
-                wtArr{ch} = i_wtChannel(ch, channel_inclusion, channel_info, sortedSamples{ch,1}, ...
-                    cfg, useTemplate, half_window, num_channels, winBundle{ch});
-            end
-            clear winBundle;
-
-            % ---- Pack results into the maps the serial relabel phase reads ---
-            for ch = 1:num_channels
-                fm = fdArr{ch};
-                if ~isempty(fm)
-                    spk_idx_channels(ch)         = fm.spk_idx;
-                    spk_Val_channels(ch)         = fm.spk_Val;
-                    spk_ID_channels(ch)          = fm.spk_ID;
-                    bp_channels(ch)              = fm.bandpass;
-                    channel_thresholds{ch, 1}    = fm.rms_values;
-                    out_filtered_channels(ch)    = fm.out_filtered;
-                    reserve_spk_idx_channels(ch) = fm.reserve_spk_idx;
-                    reserve_spk_Val_channels(ch) = fm.reserve_spk_Val;
-                    reserve_spk_ID_channels(ch)  = fm.reserve_spk_ID;
-                end
-                wm = wtArr{ch};
-                if ~isempty(wm)
-                    waveform_channels(ch)       = wm.waveform_channels;
-                    keep_id_channels(ch)        = wm.keep_id;
-                    unevaluated_spk_idx(ch)     = wm.unevaluated_spk_idx;
-                    chunk_channel_inclusion(ch) = wm.chunk_incl;
-                    if ~isempty(wm.relabling)
-                        relabling_channels(ch)   = wm.relabling;
-                        output_labels(ch)        = wm.output.labels;
-                        output_updatedLabels(ch) = wm.output.updatedLabels;
-                        output_features(ch)      = wm.output.features;
-                        output_spk_idx(ch)       = wm.output.spk_idx;
-                        output_waveform(ch)      = wm.output.waveform;
-                        output_amplitude(ch)     = wm.output.amplitude;
-                        output_bestVariant(ch)   = wm.output.bestVariant;
-                    else
-                        % Included channel with no kept spikes: mirror the serial
-                        % path, which sets empty entries the relabel phase reads.
-                        relabling_channels(ch)   = [];
-                        output_labels(ch)        = [];
-                        output_updatedLabels(ch) = [];
-                        output_features(ch)      = [];
-                        output_spk_idx(ch)       = [];
-                        output_waveform(ch)      = [];
-                        output_amplitude(ch)     = [];
-                        output_bestVariant(ch)   = [];
-                    end
-                end
-            end
-            clear fdArr wtArr;
-        end
-
         for ch_idx = 1:num_channels
             if ~isempty(progressFcn)
                 pct = ((chunk_i - 1) + (ch_idx - 1) / num_channels) / num_chunks;
@@ -279,7 +182,7 @@ try
 
             last_batch_channel = min(ch_indices_mapped(end),num_channels);
 
-            if ~parallelChan && ch_idx == 1
+            if ch_idx == 1
                 batch_idx = 1;
                 start_ch = channel_idx(batch_idx);
                 end_ch = batch_idx * batch_ch_size;
@@ -307,7 +210,7 @@ try
                     end
                 end
 
-            elseif ~parallelChan && any(channel_idx == last_batch_channel) && last_batch_channel~=num_channels
+            elseif any(channel_idx == last_batch_channel) && last_batch_channel~=num_channels
                 batch_idx = find(channel_idx == last_batch_channel);
                 start_ch = channel_idx(batch_idx);
                 end_ch = batch_idx * batch_ch_size;
@@ -381,10 +284,6 @@ try
                 end
             end
 
-            % Waveform extraction + template matching. In per-channel parallel mode
-            % this is precomputed in the parallel passes above; skip it here and run
-            % only the (serial) cross-channel relabel below.
-            if ~parallelChan
             inputWF.bandpass_data_window         = cell(length(ch_indices_mapped), 1);
             inputWF.spk_idx_all_channels         = cell(length(ch_indices_mapped), 1);
             inputWF.inclusion                    = zeros(length(ch_indices_mapped),1);
@@ -476,7 +375,6 @@ try
                 end
 
             end
-            end   % ~parallelChan (waveform/template block)
 
             if ch_idx > search_window
 
@@ -787,27 +685,16 @@ try
             fprintf('Processed channel %d/%d\n', ch_idx, num_channels);
             toc
 
-            if ~parallelChan
-                toRemoveChannels = setdiff(cell2mat(keys(bp_channels)), ch_indices_cluster);
-                if ch_idx == num_channels
-                    toRemoveChannels = cell2mat(keys(bp_channels));
-                end
-                keys_to_remove = num2cell(toRemoveChannels);
+            toRemoveChannels = setdiff(cell2mat(keys(bp_channels)), ch_indices_cluster);
+            if ch_idx == num_channels
+                toRemoveChannels = cell2mat(keys(bp_channels));
+            end
+            keys_to_remove = num2cell(toRemoveChannels);
 
-                for j = 1:length(mapNames)
-                    currentMap = eval(mapNames{j});
-                    remove(currentMap, keys_to_remove);
-                    eval([mapNames{j} ' = currentMap;']);
-                end
-            elseif ch_idx == num_channels
-                % Parallel mode keeps all channels resident through the chunk (they
-                % were packed up front); clear every map at the end for the next chunk.
-                for j = 1:length(mapNames)
-                    currentMap = eval(mapNames{j});
-                    ck = keys(currentMap);
-                    if ~isempty(ck), remove(currentMap, ck); end
-                    eval([mapNames{j} ' = currentMap;']);
-                end
+            for j = 1:length(mapNames)
+                currentMap = eval(mapNames{j});
+                remove(currentMap, keys_to_remove);
+                eval([mapNames{j} ' = currentMap;']);
             end
 
         end
@@ -977,119 +864,6 @@ out.scale_factor = [];
 out.rms_values   = [];
 out.SNR          = [];
 out.inclusion    = 0;
-end
-
-function fd = i_fdChannel(channel_data, ch, channel_info, cfg)
-% Per-channel filter + detect on one already-whitened channel row. Mirrors the
-% neighbour-detect body of the main loop. Takes the channel's row (so parfor can
-% slice whitened_chunk(ch,:) and avoid broadcasting the whole chunk to workers).
-    fd = [];
-    channel_data = double(channel_data);
-    out_filtered = kiaSort_filter_signal(channel_data, cfg);
-    out_filtered.rms_bands    = channel_info.rms_bands_channels(ch,:);
-    out_filtered.scale_factor = channel_info.scale_factor(ch);
-    out_filtered.adj_distant  = channel_info.adj_distant(ch);
-    out_filtered.Ns_seq       = channel_info.Ns_seq;
-    out_filtered.band_pairs   = channel_info.band_pairs;
-    out_filtered.mad_Thresh   = channel_info.mad_Thresh(ch);
-    out_detected = kiaSort_detect_spike(out_filtered, cfg, 0);
-    fd.spk_idx         = out_detected.spk_idx;
-    fd.spk_Val         = out_detected.spk_Val;
-    fd.spk_ID          = out_detected.spk_ID;
-    fd.bandpass        = out_filtered.bandpass_signal;
-    fd.rms_values      = out_detected.rms_values;
-    fd.out_filtered    = out_filtered;
-    fd.reserve_spk_idx = out_detected.reserve_spk_idx;
-    fd.reserve_spk_Val = out_detected.reserve_spk_Val;
-    fd.reserve_spk_ID  = out_detected.reserve_spk_ID;
-end
-
-function wt = i_wtChannel(ch, channel_inclusion, channel_info, ssCh, cfg, ...
-        useTemplate, half_window, num_channels, windowFd)
-% Per-channel waveform extraction + template matching + own-channel relabel on
-% the precomputed filter/detect results for this channel's WINDOW (windowFd is a
-% cell array of fd structs for max(1,ch-hw):min(N,ch+hw), in order). Mirrors the
-% main loop's waveform/template block; returns [] for excluded channels.
-    wt = [];
-    if ~channel_inclusion(ch), return; end
-    ch_indices_mapped = (max(1, ch - half_window) : min(num_channels, ch + half_window))';
-    n = numel(ch_indices_mapped);
-    mainPos = find(ch_indices_mapped == ch, 1);
-    inputWF = struct();
-    inputWF.bandpass_data_window = cell(n,1);
-    inputWF.spk_idx_all_channels = cell(n,1);
-    inputWF.spk_ID_all_channels  = cell(n,1);
-    inputWF.channel_thresholds   = cell(n,1);
-    inputWF.inclusion            = zeros(n,1);
-    inputWF.main_channel_idx     = ch;
-    inputWF.all_channel_idx      = ch_indices_mapped;
-    inputWF.Ns_seq               = channel_info.Ns_seq;
-    for idx = 1:n
-        mc = ch_indices_mapped(idx);
-        fm = windowFd{idx};
-        if ~isempty(fm)
-            inputWF.bandpass_data_window{idx,1} = fm.bandpass;
-            inputWF.spk_idx_all_channels{idx,1} = fm.spk_idx;
-            inputWF.spk_ID_all_channels{idx,1}  = fm.spk_ID;
-            inputWF.channel_thresholds{idx,1}   = fm.rms_values;
-        end
-        inputWF.inclusion(idx,1) = channel_inclusion(mc);
-    end
-    if ~inputWF.inclusion(mainPos), return; end
-
-    cancel_overlap = 1; sample = 0;
-    waveOut = kiaSort_waveform_extraction(cfg, inputWF, cancel_overlap, sample);
-
-    wt.waveform_channels = waveOut;                         % full waveOut (pre-trim)
-    out_bestChannel   = kiaSort_best_channel_detection(waveOut, 100, cfg);
-    waveOut.waveform  = waveOut.waveform(out_bestChannel.keep, :, :);
-    waveOut.waveformInfo = ssCh.waveformInfo;
-    fm = windowFd{mainPos};
-    tmp_idx         = fm.spk_idx;
-    sorting_spk_idx = tmp_idx(out_bestChannel.keep);
-    amplitude       = fm.spk_Val .* fm.spk_ID;
-    amplitude       = amplitude(out_bestChannel.keep);
-    chunk_incl      = ~isempty(sorting_spk_idx);
-    altChannels     = out_bestChannel.max_altChannel(out_bestChannel.keep);
-    wt.keep_id              = out_bestChannel;
-    wt.unevaluated_spk_idx  = sorting_spk_idx;
-    wt.chunk_incl           = chunk_incl;
-    wt.relabling            = [];
-    wt.output = struct('labels',[],'updatedLabels',[],'features',[], ...
-        'spk_idx',[],'waveform',[],'amplitude',[],'bestVariant',[]);
-
-    if chunk_incl
-        if useTemplate
-            data_sorting.waveform     = waveOut.waveform;
-            data_sorting.templateInfo = prepareTemplateInfo(ssCh);
-            data_sorting.amplitude    = amplitude;
-            [predLabels, features, validKeep, bestVarIdx] = kiaSort_template_matching(data_sorting, cfg);
-        else
-            data_sorting = kiaSort_preprocess_waveforms(waveOut, cfg);
-            data_sorting.classifierInfo = ssCh.classifierInfo;
-            data_sorting.PCA            = ssCh.clusteringInfo.PCA;
-            data_sorting.amplitude      = amplitude;
-            [predLabels, features, validKeep] = kiaSort_predict_spike_labels(data_sorting, cfg);
-            bestVarIdx = ones(size(predLabels));
-        end
-        if iscategorical(predLabels)
-            predLabels = str2double(cellstr(predLabels));
-        end
-        clusterSelection  = ssCh.clusteringInfo.clusterSelection;
-        clusterRelabeling = ssCh.clusteringInfo.clusterRelabeling;
-        [updatedLabels, realigned_spk_idx, realigned_waveform, ~] = ...
-            realignSpikes(predLabels, waveOut.waveform, sorting_spk_idx, clusterRelabeling, cfg);
-        relabling_out = kiaSort_evaluate_labels(updatedLabels, clusterSelection, altChannels, validKeep);
-        wt.relabling = relabling_out;
-        k = relabling_out.keep;
-        wt.output.labels        = predLabels(k);
-        wt.output.updatedLabels = updatedLabels(k);
-        wt.output.features      = features(k, :);
-        wt.output.spk_idx       = realigned_spk_idx(k);
-        wt.output.waveform      = realigned_waveform(k, :, :);
-        wt.output.amplitude     = amplitude(k);
-        wt.output.bestVariant   = bestVarIdx(k);
-    end
 end
 
 function selected_data = batch_extract(m, chunk_limits, start_ch, end_ch, channel_mapping, channel_inclusion, cfg)

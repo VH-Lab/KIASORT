@@ -39,7 +39,6 @@ function result = kiaSort_validate_parallel_sort(inputPath, outputPath, numChann
     p.numWorkers    = 4;
     p.dataType      = 'int16';
     p.cfg_overrides = struct();
-    p.strategy      = 'chunk';     % 'chunk' (orchestrator) or 'channel' (cfg.parallelChan)
     p.verbose       = true;
     for i = 1:2:numel(varargin)
         key = varargin{i};
@@ -85,22 +84,10 @@ function result = kiaSort_validate_parallel_sort(inputPath, outputPath, numChann
         'resultSubdir', 'RES_Sorted_serial', 'skip_posthoc', true);
     tSerial = toc(tSerial);
 
-    if p.verbose, fprintf('[validate] PARALLEL stage 3 (%s, %d workers) -> RES_Sorted ...\n', p.strategy, p.numWorkers); end
+    if p.verbose, fprintf('[validate] PARALLEL stage 3 (%d workers) -> RES_Sorted ...\n', p.numWorkers); end
     tParallel = tic;
-    switch lower(p.strategy)
-        case 'channel'
-            % Per-channel-within-chunk parallelism (cfg.parallelChan) via a direct
-            % kiaSort_main_sortData call; ensure a worker pool exists.
-            if isempty(gcp('nocreate')), parpool(p.numWorkers); end
-            cfgc = cfg;
-            cfgc.parallelChan = true;
-            kiaSort_main_sortData(inputPath, outputPath, cfgc, ...
-                'resultSubdir', 'RES_Sorted', 'skip_posthoc', true);
-        otherwise
-            % Chunk-level parallelism via the orchestrator.
-            kiaSort_sortData_parallel(inputPath, outputPath, cfg, ...
-                'numWorkers', p.numWorkers, 'skipPostHoc', true, 'verbose', p.verbose);
-    end
+    kiaSort_sortData_parallel(inputPath, outputPath, cfg, ...
+        'numWorkers', p.numWorkers, 'skipPostHoc', true, 'verbose', p.verbose);
     tParallel = toc(tParallel);
 
     fprintf('[validate] timing: serial %.1f s | parallel %.1f s | speedup %.2fx (%d workers)\n', ...
