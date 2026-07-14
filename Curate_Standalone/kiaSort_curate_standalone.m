@@ -58,7 +58,18 @@ function fig = kiaSort_curate_standalone(outputFolder, cfg)
     figColor = [0.94 0.94 0.94];
     fig = uifigure('Name', 'KIASORT Curation', ...
         'Position', [100 100 1150 720], 'Color', figColor);
-    panel = uigridlayout(fig, [1 1], 'Padding', [0 0 0 0]);
+
+    % kiaSort_curate_results places its widgets directly into this grid using
+    % fixed Layout.Row/Column (leftPanel at cols [1 5] rows [2 3], Save button at
+    % row 1 col 4, the Visualization/Plots panels at col 6). It does NOT set the
+    % grid's dimensions itself, so the parent must be a [3 6] grid with the same
+    % proportions as the main GUI's tab3 grid - otherwise the layout collapses
+    % (e.g. an enormous Save button filling the top).
+    panel = uigridlayout(fig, [3 6], ...
+        'RowHeight',   {'fit','fit','1x'}, ...
+        'ColumnWidth', {'fit','fit','fit','fit','1x','4x'}, ...
+        'Padding',     10, ...
+        'RowSpacing',  10);
 
     kiaSort_curate_results(cfg, panel, figColor, fig);
 end
