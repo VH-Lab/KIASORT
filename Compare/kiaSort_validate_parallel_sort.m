@@ -79,16 +79,25 @@ function result = kiaSort_validate_parallel_sort(inputPath, outputPath, numChann
     end
 
     if p.verbose, fprintf('[validate] SERIAL stage 3 -> RES_Sorted_serial ...\n'); end
+    tSerial = tic;
     kiaSort_main_sortData(inputPath, outputPath, cfg, ...
         'resultSubdir', 'RES_Sorted_serial', 'skip_posthoc', true);
+    tSerial = toc(tSerial);
 
     if p.verbose, fprintf('[validate] PARALLEL stage 3 (%d workers) -> RES_Sorted ...\n', p.numWorkers); end
+    tParallel = tic;
     kiaSort_sortData_parallel(inputPath, outputPath, cfg, ...
         'numWorkers', p.numWorkers, 'skipPostHoc', true, 'verbose', p.verbose);
+    tParallel = toc(tParallel);
+
+    fprintf('[validate] timing: serial %.1f s | parallel %.1f s | speedup %.2fx (%d workers)\n', ...
+        tSerial, tParallel, tSerial / max(tParallel, eps), p.numWorkers);
 
     result = kiaSort_compare_sortings(outputPath, outputPath, fs, ...
         'subdirA', 'RES_Sorted_serial', 'subdirB', 'RES_Sorted', ...
         'nameA', 'serial', 'nameB', 'parallel', 'verbose', p.verbose);
+    result.timing = struct('serial_s', tSerial, 'parallel_s', tParallel, ...
+        'speedup', tSerial / max(tParallel, eps), 'numWorkers', p.numWorkers);
 
     if result.exact.same_spike_times && isequal(result.exact.same_labels, true)
         fprintf('\n[validate] PASS: parallel stage 3 is identical to serial.\n');
